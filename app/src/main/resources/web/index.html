@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>补偿流程演练场</title>
+<style>
+  :root {
+    --bg: #0f172a; --panel: #111c33; --panel2:#16223f; --line:#263557;
+    --text:#e6ecf7; --muted:#93a0bd; --accent:#5b9dff; --ok:#34c98e;
+    --warn:#f5b452; --err:#ff6b6b; --purple:#b58cff;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", Segoe UI, sans-serif;
+         background:var(--bg); color:var(--text); }
+  header { padding:18px 26px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:16px; }
+  header h1 { font-size:20px; margin:0; }
+  header .sub { color:var(--muted); font-size:13px; }
+  main { padding:20px 26px; display:grid; grid-template-columns: 340px 1fr; gap:18px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; }
+  .panel h2 { font-size:14px; margin:0 0 12px; color:var(--muted); letter-spacing:.5px; }
+  .instance-list a { display:block; padding:9px 11px; border-radius:8px; color:var(--text);
+      text-decoration:none; margin-bottom:6px; background:var(--panel2); border:1px solid transparent;
+      font-size:13px; cursor:pointer; }
+  .instance-list a.active { border-color:var(--accent); }
+  .badge { display:inline-block; padding:1px 8px; border-radius:999px; font-size:11px; margin-left:6px; }
+  .b-running { background:#234; color:#8fd0ff; }
+  .b-await_manual { background:#4a3a17; color:var(--warn); }
+  .b-compensating { background:#3b2a55; color:var(--purple); }
+  .b-failed_compensation { background:#4d2020; color:var(--err); }
+  .b-completed { background:#123b2c; color:var(--ok); }
+  .b-compensated { background:#123b2c; color:var(--ok); }
+  .b-locked { background:#2a2f3d; color:var(--muted); }
+  .dag { display:flex; flex-direction:column; gap:10px; }
+  .dagrow { display:flex; gap:10px; align-items:stretch; flex-wrap:wrap; }
+  .step { flex:1; min-width:200px; background:var(--panel2); border:1px solid var(--line); border-radius:10px;
+          padding:11px 13px; }
+  .step .stitle { font-weight:600; font-size:14px; margin-bottom:2px; }
+  .step .smeta { color:var(--muted); font-size:12px; margin-bottom:8px; }
+  .step ul { list-style:none; padding:0; margin:8px 0 0; font-size:12px; }
+  .step li { padding:3px 0; border-top:1px dashed #22304f; color:#c4d0e8; }
+  .step li b { color:var(--muted); font-weight:500; margin-right:6px; }
+  .arrow { color:var(--muted); align-self:center; }
+  .chip { font-family:ui-monospace,monospace; font-size:11px; background:#0c1426; border:1px solid var(--line);
+          padding:1px 6px; border-radius:6px; }
+  button { background:var(--accent); border:none; color:#081326; font-weight:600; border-radius:8px;
+           padding:7px 12px; cursor:pointer; font-size:12px; margin:3px 5px 0 0; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  button.danger { background:var(--err); color:#2a0d0d; }
+  .lease { font-size:12px; color:var(--muted); }
+  .order { font-size:12px; margin-top:6px; }
+  .order span { display:inline-block; background:#232f4d; border-radius:6px; padding:2px 8px; margin:2px; }
+  pre { background:#0b1322; border:1px solid var(--line); border-radius:8px; padding:10px; font-size:11px;
+        max-height:230px; overflow:auto; color:#aebcd9; }
+  .events { max-height:260px; overflow:auto; font-size:12px; }
+  .events div { padding:3px 0; border-bottom:1px solid #18233c; }
+  .pill { font-size:11px; padding:0 7px; border-radius:999px; }
+  .s-CONFIRMED, .s-COMPENSATED { color:var(--ok); }
+  .s-AWAIT_CONFIRM { color:var(--warn); }
+  .s-FAILED, .s-COMPENSATE_FAILED { color:var(--err); }
+  .s-INTENT_WRITTEN, .s-RECEIPT_WRITTEN, .s-COMPENSATING { color:var(--purple); }
+  .toast { position:fixed; right:22px; bottom:22px; background:var(--panel2); border:1px solid var(--accent);
+           padding:11px 15px; border-radius:10px; font-size:13px; display:none; max-width:380px; }
+  .toast.err { border-color:var(--err); }
+  .muted { color:var(--muted); font-size:12px; }
+  .twocol { display:grid; grid-template-columns: 1fr 1fr; gap:14px; margin-top:14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>补偿流程演练场</h1>
+  <span class="sub">本地确定性 adapter · intent → receipt → confirm · fencing 租约 · 可继续补偿</span>
+  <span style="flex:1"></span>
+  <button class="ghost" onclick="loadAll()">刷新</button>
+</header>
+<main>
+  <div>
+    <div class="panel instance-list" style="margin-bottom:14px;">
+      <h2>流程实例</h2>
+      <div id="instances"></div>
+    </div>
+    <div class="panel">
+      <h2>操作</h2>
+      <div id="actions"></div>
+      <h2 style="margin-top:14px;">租约 / 代次</h2>
+      <div id="lease" class="lease"></div>
+      <h2 style="margin-top:14px;">补偿顺序（依赖逆序）</h2>
+      <div id="comporder" class="order"></div>
+      <div id="compcursor" class="muted" style="margin-top:6px;"></div>
+    </div>
+  </div>
+  <div>
+    <div class="panel">
+      <h2 id="dtitle">DAG 与每步状态</h2>
+      <div id="dag" class="dag"><span class="muted">请选择左侧实例。</span></div>
+    </div>
+    <div class="twocol">
+      <div class="panel">
+        <h2>事件时间线（含 intent / receipt / confirm / fencing）</h2>
+        <div id="events" class="events"></div>
+      </div>
+      <div class="panel">
+        <h2>实例 JSON</h2>
+        <pre id="raw"></pre>
+      </div>
+    </div>
+  </div>
+</main>
+<div class="toast" id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>

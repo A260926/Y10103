@@ -34,3 +34,8 @@ coverage/
 .vite/
 .turbo/
 *.tsbuildinfo
+
+# SQLite databases
+*.db
+*.db-shm
+*.db-wal
